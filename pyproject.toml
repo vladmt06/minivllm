@@ -1,7 +1,7 @@
 [project]
 name = "minivllm"
 version = "0.1.0"
-description = "Add your description here"
+description = "A miniature vLLM: paged KV cache and continuous batching for TinyLlama"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,4 +11,12 @@ dependencies = [
     "safetensors>=0.8.0",
     "torch>=2.13.0",
     "transformers>=5.14.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    # Tiers 2 and 3 load TinyLlama twice (ours + the HF reference) and decode on
+    # CPU/fp32 by design. Deselect with `-m "not slow"` while iterating.
+    "slow: needs model weights and runs a real forward pass",
 ]
