@@ -107,6 +107,10 @@ def build_model_input(
         assert seq.num_uncomputed == 1, (
             f"{seq!r} has {seq.num_uncomputed} uncomputed tokens; decode feeds exactly 1"
         )
+        assert len(seq.block_table) >= seq.num_blocks_needed(block_size), (
+            f"{seq!r} is under-allocated; the scheduler must grow the block table "
+            f"before the step, not after"
+        )
         i = seq.num_tokens - 1
         input_ids.append(seq.last_token_id)
         positions.append(i)
