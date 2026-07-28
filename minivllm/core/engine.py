@@ -45,6 +45,8 @@ class LLMEngine:
 
         self.model = model
         self.cfg = model_config
+        self.cache_config = cache_config
+        self.scheduler_config = scheduler_config
         self.device = torch.device(device)
         self.block_size = cache_config.block_size
         self.max_model_len = min(
@@ -152,6 +154,21 @@ class LLMEngine:
         seqs = [self.add_request(p, params, arrival=float(i)) for i, p in enumerate(prompts)]
         self.run()
         return [s.output_ids for s in seqs]
+
+    def reset(self) -> None:
+        """Drop all queues and hand every block back, keeping the loaded weights
+        and the allocated cache tensors. Benchmarks sweep a parameter across
+        many runs; reloading 2.2 GB of weights between them would dominate.
+
+        Stale KV is left in the pool on purpose -- it is unreachable once the
+        block tables are gone, and zeroing it would cost a full pool write that
+        the real engine never pays.
+        """
+        self.scheduler = Scheduler(
+            self.cache_config, self.scheduler_config, self.kv_cache.num_blocks
+        )
+        self.num_steps = 0
+        self.num_generated_tokens = 0
 
     # -- diagnostics ---------------------------------------------------------
 
