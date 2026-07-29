@@ -128,7 +128,7 @@ def summarize(specs, seeds=range(6)) -> dict:
             "attribution_accuracy": sum(accs) / len(accs),
             "union_count_within_1_rate": sum(union_ok) / len(union_ok),
         })
-    return {"rows": rows}
+    return {"rows": rows, "chance": 1 / len(TOOL_TAXONOMY)}
 
 
 def main() -> None:

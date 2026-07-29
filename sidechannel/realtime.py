@@ -247,20 +247,15 @@ def build_victim(tool_sequence: list[str], gen_len: int = 24) -> Program:
     return Program(turns=turns, prompt_len=16, arrival=0.1, tenant_id=1)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tools", nargs="+", default=["web_search", "db_query", "calc", "code_exec"])
-    ap.add_argument("--max-num-seqs", type=int, default=6)
-    ap.add_argument("--drain-ms", type=int, default=800)
-    args = ap.parse_args()
-
-    server = RealtimeServer(max_num_seqs=args.max_num_seqs)
-    server.submit_background(args.max_num_seqs - 1)
-    # warm the model / fill the batch before the victim arrives
-    for _ in range(30):
+def capture(tool_sequence: list[str], max_num_seqs: int = 6, drain_ms: int = 800) -> dict:
+    """Run one threaded real-model experiment; return the attacker's admission
+    timeline (ms, relative to start), the victim's ground truth, and the score."""
+    server = RealtimeServer(max_num_seqs=max_num_seqs)
+    server.submit_background(max_num_seqs - 1)
+    for _ in range(30):  # warm the model / fill the batch before the victim arrives
         server.step_once()
 
-    victim = build_victim(args.tools)
+    victim = build_victim(tool_sequence)
     server.submit_victim(victim)
 
     serving = threading.Thread(target=server.run_serving, daemon=True)
@@ -269,33 +264,44 @@ def main() -> None:
     serving.start()
     attacker.start()
 
-    # Let it run until the victim's program completes, plus a drain tail.
     while not server.victim_done():
         time.sleep(0.02)
-    time.sleep(args.drain_ms / 1000.0)
+    time.sleep(drain_ms / 1000.0)
     attacker.stop()
     server._stop.set()
     serving.join(timeout=2.0)
 
-    # Score over the victim's session only: admissions before it departed and its
-    # slot freed permanently. Departure is the operator's ground truth, exactly as
-    # in the deterministic harness.
     end = (server.victim_departed_ms or (t0 + 1e18)) - t0
     admits = [a - t0 for a in attacker.admit_ms if a - t0 <= end]
     truth = [(name, s - t0, e - t0) for name, s, e in victim.ground_truth]
-
-    step_ms = _median_step_ms(attacker.latencies_ms)
-    print(f"real-model wall-clock run: {len(attacker.admit_ms)} probe admissions, "
-          f"median probe latency {step_ms:.0f} ms")
-    print(f"victim tool calls (ground truth): {[t for t, _, _ in truth]}")
-
     s = score(admits, truth, taxonomy=REALTIME_TOOLS, gap=None)
+    return {
+        "admits_ms": admits,
+        "truth": [[n, sst, e] for n, sst, e in truth],
+        "tools": {n: t.duration_mean for n, t in REALTIME_TOOLS.items()},
+        "median_probe_latency_ms": _median_step_ms(attacker.latencies_ms),
+        "tool_accuracy": s.tool_accuracy,
+        "turn_count_exact": s.turn_count_exact,
+        "duration_mae_ms": s.duration_mae,
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--tools", nargs="+", default=["web_search", "db_query", "calc", "code_exec"])
+    ap.add_argument("--max-num-seqs", type=int, default=6)
+    args = ap.parse_args()
+
     from sidechannel.reconstruct import session_bursts
 
-    bursts = session_bursts(admits, taxonomy=REALTIME_TOOLS)
+    r = capture(args.tools, max_num_seqs=args.max_num_seqs)
+    print(f"real-model wall-clock run: {len(r['admits_ms'])} probe admissions, "
+          f"median probe latency {r['median_probe_latency_ms']:.0f} ms")
+    print(f"victim tool calls (ground truth): {[t[0] for t in r['truth']]}")
+    bursts = session_bursts(r["admits_ms"], taxonomy=REALTIME_TOOLS)
     print(f"recovered tools: {[classify(b.width, REALTIME_TOOLS) for b in bursts]}")
-    print(f"{s.summary()}")
-    print("\nSIGNAL SURVIVES WALL-CLOCK" if s.tool_accuracy >= 0.5 and s.turn_count_exact
+    print(f"tool accuracy {r['tool_accuracy']:.0%}, duration MAE {r['duration_mae_ms']:.0f} ms")
+    print("\nSIGNAL SURVIVES WALL-CLOCK" if r["tool_accuracy"] >= 0.5 and r["turn_count_exact"]
           else "\nsignal degraded under wall-clock -- see numbers")
 
 

@@ -185,3 +185,12 @@ vLLM is future work.
 Run the tests: `uv run pytest tests/test_program.py tests/test_sidechannel.py -q`
 (the leak is checked across five seeds). Program-aware mode is a `SchedulerConfig`
 flag, off by default — the engine above is byte-for-byte unchanged when it is off.
+
+**Full study:** [`sidechannel/REPORT.md`](sidechannel/REPORT.md) — threat model,
+channel capacity in bits with degradation curves, the defense Pareto frontier,
+multi-victim breakpoint, related work, and limitations. It hardens the
+demonstration into a rigorous study: the channel is shown to survive a real
+TinyLlama forward on MPS with the attacker on a separate thread (100% tool
+identification, ~23 ms pause-duration error), and a randomised-admission-delay
+defense closes it while preserving 74% of benign throughput. Regenerate every
+number and figure with `uv run python -m sidechannel.run_all`.
