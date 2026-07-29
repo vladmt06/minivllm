@@ -23,20 +23,30 @@ class Burst:
         return self.end - self.start + 1
 
 
-def infer_gap(admit_steps: list[int]) -> int:
+def infer_gap(admit_steps) -> float:
     """The grouping gap an adaptive attacker would use.
 
-    If the system admits on a cadence P (the admission-cadence defense), probes
-    within one pause land P steps apart, so a fixed gap of 2 would shatter each
-    pause into singletons and hand the defender an unearned win. A real attacker
-    reads P off its own admission spacing -- the smallest recurring interval --
-    and groups with gap ~ P. Undefended, that interval is 1 and the gap is 2.
+    Admissions are bimodal: tightly spaced *within* a tool-call pause (~one step,
+    or the cadence period under the cadence defense) and widely spaced *between*
+    pauses (the victim's generation phase). Any threshold between the two clusters
+    groups a pause correctly. The attacker finds it by locating the largest
+    multiplicative jump in its own sorted inter-admission gaps -- no knowledge of
+    the victim or the step time required. This is what makes the reconstruction
+    survive both clean integer steps and noisy wall-clock milliseconds.
     """
     steps = sorted(set(admit_steps))
-    if len(steps) < 2:
+    if len(steps) < 3:
         return 2
     diffs = sorted(b - a for a, b in zip(steps, steps[1:]))
-    return max(2, diffs[0] + 1)  # smallest interval = the cadence
+    split_i, best_ratio = 0, 1.0
+    for i in range(1, len(diffs)):
+        prev = diffs[i - 1] or 0.5
+        ratio = diffs[i] / prev
+        if ratio > best_ratio:
+            best_ratio, split_i = ratio, i
+    if best_ratio >= 3.0:  # a clear gap between intra- and inter-pause spacing
+        return (diffs[split_i - 1] + diffs[split_i]) / 2.0
+    return diffs[-1] + 1  # unimodal: no separable pauses
 
 
 def find_bursts(admit_steps: list[int], gap: int | None = None) -> list[Burst]:
@@ -70,11 +80,11 @@ def max_tool_width(taxonomy=TOOL_TAXONOMY) -> int:
     return 2 * max(t.duration_mean for t in taxonomy.values())
 
 
-def session_bursts(admit_steps: list[int], gap: int | None = None) -> list[Burst]:
+def session_bursts(admit_steps, gap: int | None = None, taxonomy=TOOL_TAXONOMY) -> list[Burst]:
     """Bursts during the victim's live session: every burst up to the first one
     too wide to be a tool (the departure flood), which is dropped along with
-    everything after it."""
-    cutoff = max_tool_width()
+    everything after it. `taxonomy` sets the width units (steps or ms)."""
+    cutoff = max_tool_width(taxonomy)
     kept: list[Burst] = []
     resolved_gap = infer_gap(admit_steps) if gap is None else gap
     for b in find_bursts(admit_steps, resolved_gap):
@@ -103,11 +113,12 @@ class Score:
 
 
 def score(
-    admit_steps: list[int],
-    ground_truth: list[tuple[str, int, int]],  # (tool, start, end)
+    admit_steps,
+    ground_truth: list[tuple[str, float, float]],  # (tool, start, end)
     gap: int | None = None,
+    taxonomy=TOOL_TAXONOMY,
 ) -> Score:
-    bursts = session_bursts(admit_steps, gap)
+    bursts = session_bursts(admit_steps, gap, taxonomy)
     n_truth = len(ground_truth)
 
     # Align bursts to truth in time order (both are chronological).
@@ -117,7 +128,7 @@ def score(
     for (tool, start, end), burst in paired:
         true_dur = end - start
         abs_err.append(abs(burst.width - true_dur))
-        guess = classify(burst.width)
+        guess = classify(burst.width, taxonomy)
         confusion[(tool, guess)] = confusion.get((tool, guess), 0) + 1
         correct += guess == tool
 
