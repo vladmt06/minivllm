@@ -21,10 +21,12 @@ ATTACKER_TENANT = 2
 class ClosedLoopProber:
     runner: ProgramRunner
     tenant_id: int = ATTACKER_TENANT
+    probe_period: int = 1  # steps to wait after an admission before re-arming
     admit_steps: list[int] = field(default_factory=list)  # the only observable
     latencies: list[int] = field(default_factory=list)
     _submit_step: int = 0
     _outstanding: int | None = None
+    _rearm_at: int = 0
 
     def _arm(self) -> None:
         step = self.runner.sched.step_counter
@@ -44,12 +46,16 @@ class ClosedLoopProber:
 
     def observe(self) -> None:
         """Call once per engine step, after runner.step(). Records an admission
-        the step it happens and immediately re-arms."""
+        the step it happens; re-arms after probe_period steps (probe_period=1 is
+        the maximal-rate attacker, larger periods model a slower prober)."""
+        step = self.runner.sched.step_counter
         if self._outstanding is None:
-            self._arm()
+            if step >= self._rearm_at:
+                self._arm()
             return
         run = self.runner.first_run_step.get(self._outstanding)
-        if run == self.runner.sched.step_counter:
+        if run == step:
             self.admit_steps.append(run)
             self.latencies.append(run - self._submit_step)
-            self._arm()
+            self._outstanding = None
+            self._rearm_at = step + self.probe_period

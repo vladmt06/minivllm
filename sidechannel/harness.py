@@ -31,6 +31,11 @@ class Scenario:
     seed: int = 1
     kv_ttl_steps: int = 10_000
 
+    # Sweep knobs for the statistical characterization (H2).
+    probe_period: int = 1  # steps between the attacker's probes; larger = slower prober
+    admit_jitter: int = 0  # +/- steps of measurement noise added to observed admissions
+    num_benign: int = 0  # benign tenants also grabbing freed slots (contention)
+
 
 @dataclass
 class Result:
@@ -77,14 +82,21 @@ def run(scenario: Scenario, defense: Defense = NONE) -> Result:
     runner.submit(victim)
     victim_submit = sched.step_counter
 
-    prober = ClosedLoopProber(runner)
+    prober = ClosedLoopProber(runner, probe_period=scenario.probe_period)
     prober.start()
+    # Benign co-tenants also compete for a freed slot, so the attacker wins only a
+    # fraction of the pause windows -- realistic contention, and a sweep axis.
+    benign = [ClosedLoopProber(runner, tenant_id=200 + i) for i in range(scenario.num_benign)]
+    for b in benign:
+        b.start()
 
     wasted = 0
     victim_done: int | None = None
     for _ in range(scenario.steps):
         runner.step()
         prober.observe()
+        for b in benign:
+            b.observe()
         if sched.reserve_slots_on_suspend:
             # Slots held for paused programs while the attacker is demanding one:
             # capacity that could have been served but was withheld.
@@ -102,6 +114,14 @@ def run(scenario: Scenario, defense: Defense = NONE) -> Result:
     # session boundary is the operator's ground truth, not attacker oracle input.
     end = victim_done if victim_done is not None else sched.step_counter
     session_admits = [s for s in prober.admit_steps if s <= end]
+    if scenario.admit_jitter:
+        # The attacker's own timing is noisy. Perturb each observed admission and
+        # re-sort, modelling measurement jitter without needing the wall clock.
+        import random as _random
+
+        rng = _random.Random(scenario.seed ^ 0x5A5A)
+        j = scenario.admit_jitter
+        session_admits = sorted(s + rng.randint(-j, j) for s in session_admits)
     return Result(
         defense=defense.name,
         admit_steps=session_admits,
