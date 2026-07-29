@@ -144,7 +144,7 @@ class RealtimeServer:
             seq.append_token(token)
             seq.maybe_finish(self.engine.cfg.eos_token_id)
 
-        for seq in out.scheduled:
+        for seq in list(out.scheduled):  # snapshot: suspend() mutates running (= out.scheduled)
             if seq.is_finished:
                 self._on_turn_end(seq, now)
         self.sched.free_finished()

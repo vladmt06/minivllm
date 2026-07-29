@@ -108,3 +108,30 @@ def test_defense_is_a_tradeoff_not_a_free_lunch():
     assert score(base.admit_steps, base.ground_truth).tool_accuracy == 1.0
     assert score(slots.admit_steps, slots.ground_truth).tool_accuracy == 0.0
     assert slots.wasted_slot_steps > 0
+
+
+# -- multi-victim separation (H3): works for one, breaks for many ------------
+
+
+def test_single_victim_fully_separated():
+    from sidechannel.multivictim import run_multivictim
+
+    r = run_multivictim([["web_search", "db_query"]], stagger=0, seed=1)
+    s = r["scores"][0]
+    assert s.turn_count_exact and s.tool_accuracy == 1.0
+    assert r["union_count_error"] <= 1
+
+
+def test_concurrent_victims_degrade_attribution():
+    """The documented breakpoint: a single prober cannot attribute pauses once two
+    victims run concurrently, so per-victim accuracy falls well below the
+    single-victim case toward chance."""
+    from sidechannel.multivictim import _mean_acc, run_multivictim
+
+    one = sum(_mean_acc(run_multivictim([["web_search", "db_query"]], seed=s)) for s in range(4)) / 4
+    two = sum(
+        _mean_acc(run_multivictim([["web_search", "db_query"], ["calc", "code_exec"]], seed=s))
+        for s in range(4)
+    ) / 4
+    assert one > 0.9
+    assert two < 0.6  # collapses toward chance (0.25) -- honest limit, not a win

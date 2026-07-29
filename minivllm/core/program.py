@@ -128,9 +128,12 @@ class ProgramRunner:
             seq.maybe_finish(eos_token_id=-1)  # only max_tokens can fire
 
         # Turn boundaries: a finished turn either pauses (tool call, pin the KV) or
-        # ends the program. Do this BEFORE free_finished so a paused turn is pulled
-        # out of running and its blocks are not reclaimed.
-        for seq in out.scheduled:
+        # ends the program. Iterate a SNAPSHOT: out.scheduled aliases the
+        # scheduler's running list, and suspend() removes from running, so
+        # iterating it live would skip the sequence after any that suspends --
+        # invisible with one victim, a dropped turn with two. Do this BEFORE
+        # free_finished so a paused turn's blocks are not reclaimed.
+        for seq in list(out.scheduled):
             if seq.is_finished:
                 self._on_turn_end(seq)
 
