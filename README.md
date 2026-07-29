@@ -130,3 +130,58 @@ three benchmarks.
 **Out** (refcounts and block-table indirection are already in place so these stay
 additive): HTTP server, flash-decoding online softmax, prefix sharing /
 copy-on-write, swap-to-CPU preemption, chunked prefill.
+
+---
+
+# Security: program-aware scheduling is a timing side channel
+
+A defensive-security result built on the engine above. Two synthetic tenants on
+one machine; no external target.
+
+**Every documented LLM-serving timing attack leaks cache _content_** — a prefix
+cache hit speeds up TTFT and reveals what was cached (*Early Bird*, InputSnatch).
+Every defense protects content too: PrefixWall tags blocks with an owner, SafeKV
+isolates sensitive prompts. **Program-aware agentic serving** — Continuum's
+program-level FCFS plus KV cache pinned with a TTL across tool-call pauses —
+introduces a leak nobody has attacked: **the scheduler's own state**.
+
+A co-resident attacker who can only time its **own** admission latency recovers a
+victim's program timeline. When the victim pauses for a tool call it leaves the
+running batch, freeing a concurrency slot; the attacker's probe is admitted
+exactly then. Admissions cluster into bursts — one per tool call — and each
+burst's width is the tool-call duration, which fingerprints the tool.
+
+```
+uv run python -m sidechannel.run_experiment
+```
+
+Undefended, from admission timestamps alone (four-tool agent, `sidechannel/`):
+
+| | result |
+|---|---|
+| turns recovered | 4 / 4 (exact) |
+| tool-call duration MAE | 0.0 steps |
+| tool identification | **100%** |
+| cross-tenant shared cache blocks | **0** |
+
+That last row is the point: the cache is fully isolated and the channel is still
+wide open, because **the leak is in the scheduler, not the cache**. User-level
+cache isolation — the standard mitigation — changes nothing.
+
+The fix has to live in the scheduler too, and it costs:
+
+| defense | tool accuracy | cost |
+|---|---|---|
+| none | 100% | — |
+| **slot reservation** (hold a paused program's slot) | 0% (attacker starved) | idle capacity during every pause |
+| **admission cadence** (period > tool durations) | ≤ chance | every tenant's admission latency |
+
+The claim is deliberately narrow: this is a property of program-aware scheduling
+(program-level priority + TTL pinning), demonstrated on a faithful reference
+implementation, invisible to every content-level defense in the literature.
+Single-threaded determinism makes the mechanism exact; replication on production
+vLLM is future work.
+
+Run the tests: `uv run pytest tests/test_program.py tests/test_sidechannel.py -q`
+(the leak is checked across five seeds). Program-aware mode is a `SchedulerConfig`
+flag, off by default — the engine above is byte-for-byte unchanged when it is off.

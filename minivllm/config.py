@@ -87,6 +87,26 @@ class SchedulerConfig:
     max_num_batched_tokens: int = 4096
     max_model_len: int = 2048
 
+    # Program-aware serving (Continuum-style). Off by default: the scheduler is
+    # request-level FCFS and nothing below runs, so existing behaviour is
+    # untouched. On: priority is program-level FCFS and a suspended program's KV
+    # cache is pinned for kv_ttl_steps steps across a tool-call pause.
+    program_aware: bool = False
+    kv_ttl_steps: int = 32
+
+    # Defense knobs, all off by default (they only matter under program_aware).
+    # - reserve_slots_on_suspend: a paused program keeps its max_num_seqs slot, so
+    #   suspension opens no slot for another tenant to observe. Closes the batch
+    #   channel outright, at the cost of the idle slot during every pause.
+    # - reserved_blocks_per_tenant: caps blocks per tenant, so one tenant's pinning
+    #   cannot move another's admission. Closes the memory channel, costs sharing.
+    # - admission_period: admit only on a fixed clock, so the moment a request
+    #   enters is decoupled from live pin state. Coarsens the attacker's time
+    #   resolution (tunable security/latency trade) rather than closing outright.
+    reserve_slots_on_suspend: bool = False
+    reserved_blocks_per_tenant: int | None = None
+    admission_period: int = 0
+
 
 def resolve_device(spec: str = "auto") -> torch.device:
     if spec != "auto":

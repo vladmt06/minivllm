@@ -36,6 +36,7 @@ class SamplingParams:
 class SequenceStatus(Enum):
     WAITING = auto()
     RUNNING = auto()
+    SUSPENDED = auto()  # program paused for a tool call; KV pinned, not decoding
     FINISHED_STOPPED = auto()  # emitted EOS
     FINISHED_LENGTH = auto()  # hit max_tokens
     FINISHED_ABORTED = auto()
@@ -90,9 +91,29 @@ class Sequence:
     # and a preemption test that never increments it is not testing anything.
     num_preemptions: int = 0
 
+    # Program-aware serving (default None = a plain standalone request). When set,
+    # this turn belongs to a multi-turn program, and program_arrival — the arrival
+    # of the *program*, not this turn — is the scheduler's priority key. All turns
+    # of an early program thus outrank a late program's, which is program-level
+    # FCFS and also the thing the side channel reads.
+    program_id: int | None = None
+    program_arrival: float | None = None
+
+    # Billing/isolation identity. The per-tenant reservation defense caps blocks
+    # by this key, so an attacker's many probes must share one. None = each
+    # sequence is its own tenant.
+    tenant_id: int | None = None
+
     def __post_init__(self) -> None:
         if not self.prompt_ids:
             raise ValueError("empty prompt")
+
+    @property
+    def priority(self) -> tuple[float, float, int]:
+        """Scheduler ordering. Falls back to request arrival when standalone, so
+        the non-program path is byte-for-byte the old (arrival, seq_id) order."""
+        base = self.program_arrival if self.program_arrival is not None else self.arrival
+        return (base, self.arrival, self.seq_id)
 
     # -- sizes ---------------------------------------------------------------
 
