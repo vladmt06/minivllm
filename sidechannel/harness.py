@@ -44,6 +44,8 @@ class Result:
     ground_truth: list[tuple[str, int, int]]
     victim_jct: int
     wasted_slot_steps: int  # capacity withheld from other tenants (slot defense)
+    idle_slot_steps: int  # slot-steps left idle while demand waited
+    benign_admissions: int  # useful work benign co-tenants got done (throughput proxy)
     latencies: list[int]  # attacker probe admission latency (= what any tenant pays)
     cross_tenant_shared_blocks: int
     total_steps: int
@@ -55,6 +57,13 @@ class Result:
     @property
     def median_admission_latency(self) -> float:
         return median(self.latencies) if self.latencies else float("nan")
+
+    @property
+    def p99_admission_latency(self) -> float:
+        if not self.latencies:
+            return float("nan")
+        xs = sorted(self.latencies)
+        return xs[min(len(xs) - 1, int(round(0.99 * (len(xs) - 1))))]
 
 
 def run(scenario: Scenario, defense: Defense = NONE) -> Result:
@@ -91,16 +100,21 @@ def run(scenario: Scenario, defense: Defense = NONE) -> Result:
         b.start()
 
     wasted = 0
+    idle = 0
     victim_done: int | None = None
     for _ in range(scenario.steps):
         runner.step()
         prober.observe()
         for b in benign:
             b.observe()
-        if sched.reserve_slots_on_suspend:
-            # Slots held for paused programs while the attacker is demanding one:
-            # capacity that could have been served but was withheld.
-            wasted += len(sched.suspended)
+        # Idle slot-steps DURING the victim's session: capacity a slot could have
+        # served but didn't. The attacker always has demand queued, so an unfilled
+        # slot is throughput the defense cost. Bounded to the session, or the
+        # post-departure idle (identical for every defense) would swamp it.
+        if victim_done is None:
+            idle += max(0, sched.max_num_seqs - len(sched.running))
+            if sched.reserve_slots_on_suspend:
+                wasted += len(sched.suspended)
         if victim.state.name == "DONE" and not sched.suspended and victim_done is None:
             victim_done = sched.step_counter
 
@@ -114,6 +128,9 @@ def run(scenario: Scenario, defense: Defense = NONE) -> Result:
     # session boundary is the operator's ground truth, not attacker oracle input.
     end = victim_done if victim_done is not None else sched.step_counter
     session_admits = [s for s in prober.admit_steps if s <= end]
+    # Benign useful work during the session: the throughput a defense costs by
+    # withholding or delaying the freed slot from legitimate tenants.
+    benign_admissions = sum(len([s for s in b.admit_steps if s <= end]) for b in benign)
     if scenario.admit_jitter:
         # The attacker's own timing is noisy. Perturb each observed admission and
         # re-sort, modelling measurement jitter without needing the wall clock.
@@ -128,6 +145,8 @@ def run(scenario: Scenario, defense: Defense = NONE) -> Result:
         ground_truth=list(victim.ground_truth),
         victim_jct=victim_jct,
         wasted_slot_steps=wasted,
+        idle_slot_steps=idle,
+        benign_admissions=benign_admissions,
         latencies=list(prober.latencies),
         cross_tenant_shared_blocks=shared,
         total_steps=sched.step_counter,

@@ -61,6 +61,34 @@ def test_slot_reservation_starves_the_attacker():
     assert r.wasted_slot_steps > 0, "a defense with no cost is suspicious; measure it"
 
 
+def test_noise_defense_degrades_the_channel():
+    clean = run(Scenario(tool_sequence=WORKLOAD), D.NONE)
+    noisy = run(Scenario(tool_sequence=WORKLOAD), D.noise(16))
+    assert score(clean.admit_steps, clean.ground_truth).tool_accuracy == 1.0
+    assert score(noisy.admit_steps, noisy.ground_truth).tool_accuracy <= chance_accuracy() + 1e-9
+
+
+def test_block_cap_does_not_touch_the_slot_channel():
+    """A memory-quota defense against a concurrency-slot channel: it must leave
+    the leak fully open. Shown, not assumed."""
+    base = run(Scenario(tool_sequence=WORKLOAD), D.NONE)
+    capped = run(Scenario(tool_sequence=WORKLOAD), D.block_cap(64))
+    assert (
+        score(capped.admit_steps, capped.ground_truth).tool_accuracy
+        == score(base.admit_steps, base.ground_truth).tool_accuracy
+        == 1.0
+    )
+
+
+def test_noise_keeps_more_benign_throughput_than_slot_reservation():
+    """The Pareto point: both close the channel, but noise starves benign tenants
+    far less than reserving the slot outright."""
+    sc = Scenario(tool_sequence=WORKLOAD, num_benign=3)
+    noisy = run(sc, D.noise(16))
+    reserved = run(sc, D.SLOT_RESERVATION)
+    assert noisy.benign_admissions > reserved.benign_admissions
+
+
 def test_coarse_cadence_destroys_tool_fingerprinting():
     """A cadence coarser than the tools' durations leaves the attacker unable to
     tell tools apart -- at best it can guess, i.e. chance."""

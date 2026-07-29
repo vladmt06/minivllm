@@ -106,6 +106,11 @@ class SchedulerConfig:
     reserve_slots_on_suspend: bool = False
     reserved_blocks_per_tenant: int | None = None
     admission_period: int = 0
+    # Randomised admission delay: each request is held 0..noise_admission_steps
+    # steps before it may be admitted, so its start time no longer pins the pin
+    # state. Blurs the attacker's timing (a softer, tunable cadence) at a latency
+    # cost. 0 disables.
+    noise_admission_steps: int = 0
 
 
 def resolve_device(spec: str = "auto") -> torch.device:

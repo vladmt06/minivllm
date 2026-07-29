@@ -32,5 +32,9 @@ def cadence(period: int) -> Defense:
     return Defense(f"admission-cadence-{period}", {"admission_period": period})
 
 
+def noise(steps: int) -> Defense:
+    return Defense(f"admission-noise-{steps}", {"noise_admission_steps": steps})
+
+
 def block_cap(n: int) -> Defense:
     return Defense(f"block-cap-{n}", {"reserved_blocks_per_tenant": n})

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -62,6 +63,9 @@ class Scheduler:
         self.reserve_slots_on_suspend = scheduler_config.reserve_slots_on_suspend
         self.reserved_blocks_per_tenant = scheduler_config.reserved_blocks_per_tenant
         self.admission_period = scheduler_config.admission_period
+        self.noise_admission_steps = scheduler_config.noise_admission_steps
+        self._noise_rng = random.Random(20_260_729)
+        self._noise_release: dict[int, int] = {}  # seq_id -> earliest admittable step
 
         self.waiting: deque[Sequence] = deque()
         self.running: list[Sequence] = []
@@ -206,8 +210,11 @@ class Scheduler:
                 break
             if self._over_quota(seq, need, held):
                 continue  # skip, do not block lower-priority tenants behind it
+            if self._noise_deferred(seq):
+                continue  # random hold not yet elapsed
 
             self.waiting.remove(seq)
+            self._noise_release.pop(seq.seq_id, None)
             seq.block_table.extend(self.allocator.allocate(need))
             seq.status = SequenceStatus.RUNNING
             scheduled.append(seq)
@@ -347,3 +354,15 @@ class Scheduler:
             return False
         t = self._tenant_of(seq)
         return held.get(t, 0) + len(seq.block_table) + need > self.reserved_blocks_per_tenant
+
+    def _noise_deferred(self, seq: Sequence) -> bool:
+        """Randomised admission delay. Each request draws a hold of
+        0..noise_admission_steps the first time it is considered, decoupling its
+        admission time from the live pin state an attacker is timing."""
+        if self.noise_admission_steps <= 0:
+            return False
+        rel = self._noise_release.get(seq.seq_id)
+        if rel is None:
+            rel = self.step_counter + self._noise_rng.randint(0, self.noise_admission_steps)
+            self._noise_release[seq.seq_id] = rel
+        return self.step_counter < rel
